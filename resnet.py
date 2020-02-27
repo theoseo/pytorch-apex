@@ -14,6 +14,33 @@ def conv1x1(in_planes, out_planes, stride=1):
     """1x1 convolution"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
 
+class SEBlock(nn.Module):
+
+  def __init__(self, planes, ratio):
+
+      super(SEBlock, self).__init__()
+
+      self.se_pool = nn.AdaptiveAvgPool2d((1,1))
+      self.se_fc1 = nn.Linear(planes, planes // ratio)
+      self.relu = nn.ReLU(inplace=True)
+      self.se_fc2 = nn.Linear(planes // ratio, planes)
+
+  def forward(self, x):
+
+      out = self.se_pool(x)
+      out = torch.flatten(out, 1)
+      out = self.se_fc1(out)
+      #print(out.shape)
+      out = F.relu(out)
+      out = self.se_fc2(out)
+      out = torch.sigmoid(out)
+      out = out.view(out.size(0), out.size(1), 1, 1)
+      #print(x.shape)
+      #print(out.shape)
+      out = torch.mul(out.expand_as(x), x)
+
+      return out
+
 class BasicBlock(nn.Module):
     expansion = 1
     
@@ -95,6 +122,53 @@ class Bottleneck(nn.Module):
         out = self.relu(out)
         
         return out
+
+class SEBottleneck(nn.Module):
+    expansion = 4
+    
+    def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
+                 base_width=64, dilation=1, norm_layer=None):
+        super(SEBottleneck, self).__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        width = int(planes * (base_width / 64.)) * groups
+        # Both self.conv2 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = conv1x1(inplanes, width)
+        self.bn1 = norm_layer(width)
+        self.conv2 = conv3x3(width, width, stride, groups, dilation)
+        self.bn2 = norm_layer(width)
+        self.conv3 = conv1x1(width, planes * self.expansion)
+        self.bn3 = norm_layer(planes * self.expansion)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+        self.stride = stride
+        
+        self.se = SEBlock(planes * self.expansion, ratio=16)
+        
+    def forward(self, x):
+        identity = x
+        
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.relu(out)
+        
+        out = self.conv3(out)
+        out = self.bn3(out)
+        
+        out = self.se(out)
+        
+        
+        if self.downsample is not None:
+            identity = self.downsample(x)
+            
+        out += identity
+        out = self.relu(out)
+        
+        return out    
     
 class ResNet(nn.Module):
     
@@ -200,5 +274,17 @@ class ResNet(nn.Module):
 def resnet50(num_classes):
     
     model =  ResNet(Bottleneck, [3,4,6,3], num_classes=num_classes)
+    
+    return model
+
+def seresnet50(num_classes):
+    
+    model =  ResNet(SEBottleneck, [3,4,6,3], num_classes=num_classes)
+    
+    return model
+
+def resnet18(num_classes):
+    
+    model =  ResNet(BasicBlock, [2,2,2,2], num_classes=num_classes)
     
     return model
